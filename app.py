@@ -2,283 +2,243 @@ from flask import Flask, request, jsonify
 import base64
 import uuid
 import datetime
+import random
+import string
 import time
 import qrcode  # Pastikan Anda menginstal qrcode dengan pip install qrcode[pil]
 
-app = Flask(__name__)
+app = Flask(__name__)  # Inisialisasi objek Flask
 
 # Validate Input
 def validate_input(data):
-    required_fields = ['user_account_number', 'device_id', 'device_model', 'os_version', 'app_version', 'ip_address_public']
+    required_fields = ['user_account_number', 'ip_address_public', 'app_version', 'device_id', 'device_model', 'os_version']
     for field in required_fields:
-        if field not in data or not data[field]:
-            return False, f"Missing or empty field: {field}"
+        if field not in data:
+            return False, f"Missing field: {field}"
     return True, None
 
-# Generate UUID and Secret Key
+# Generate Yodu Ref No and Secret Key
 def generate_yodu_ref_no():
-    return str(uuid.uuid4())
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
 
 def generate_secret_key():
-    return base64.b64encode(uuid.uuid4().bytes).decode('utf-8')
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=16))
 
 # Get User Data
-def get_data_user(user_account_number):
-    return {
-        "name": "Riki Derian",
-        "account_number": user_account_number,
-        "balance": 1000000
+def get_data_user(account_number):
+    user_data = {
+        "account_number": account_number,
+        "name": "John Doe"
     }
+    return user_data
 
-# Encode tags recursively
+
+# Encode Tags
+def calculate_length(value):
+    """Menghitung panjang dari value dalam format hexadecimal"""
+    if isinstance(value, dict):
+        # Jika value adalah dictionary, hitung panjang semua nested tags
+        nested_length = 0
+        for inner_tag, inner_value in value.items():
+            nested_length += calculate_length(inner_value)  # Rekursif untuk tag bertingkat
+        return nested_length
+    elif isinstance(value, str):
+        # Jika value adalah string, panjangnya adalah jumlah karakter (bytes)
+        return len(value)  # Panjang dalam byte (1 karakter = 1 byte)
 def encode_tag(tag, value):
-    if isinstance(value, dict):  # Nested tag
-        inner_data = ''.join(encode_tag(inner_tag, inner_value) for inner_tag, inner_value in value.items())
-        length = len(inner_data) // 2  # Length in bytes
-        return f"{tag}{length:02X}{inner_data}"
-    else:  # Simple value
-        encoded_value = value.encode("utf-8").hex()
-        length = len(encoded_value) // 2  # Length in bytes
-        return f"{tag}{length:02X}{encoded_value}"
-def encode_tag(tag, value):
-    # Jika tag tidak perlu dikonversi
-    no_conversion_tags = ["5A", "4F", "9F25"]
-    if tag in no_conversion_tags:
-        # Kembalikan data tag apa adanya
-        if isinstance(value, dict):  # Struktur bertingkat
-            inner_data = ''.join(encode_tag(inner_tag, inner_value) for inner_tag, inner_value in value.items())
-            length = len(inner_data) // 2  # Panjang dalam byte
-            return f"{tag}{length:02X}{inner_data}"
-        else:  # Nilai sederhana
-            encoded_value = value.encode("utf-8").hex()
-            length = len(encoded_value) // 2  # Panjang dalam byte
-            return f"{tag}{length:02X}{encoded_value}"
+    # Format pengekodan tag, ini akan disesuaikan dengan standar pengkodean yang Anda inginkan.
     
-    # Konversi data ke heksadesimal
-    if isinstance(value, dict):  # Tag bertingkat
-        inner_data = ''.join(encode_tag(inner_tag, inner_value) for inner_tag, inner_value in value.items())
-        length = len(inner_data) // 2  # Panjang dalam byte
-        return f"{tag}{length:02X}{inner_data}"
-    else:  # Nilai sederhana
-        encoded_value = value.encode("utf-8").hex()
-        length = len(encoded_value) // 2  # Panjang dalam byte
-        return f"{tag}{length:02X}{encoded_value}"
+    if isinstance(value, dict):
+        nested_tags = ''.join(encode_tag(inner_tag, inner_value) for inner_tag, inner_value in value.items())
+        length_hex = f"{len(nested_tags) // 2:02X}"  # Menghitung panjang dalam byte
+        return f"{tag}{length_hex}{nested_tags}"
+    else:
+        # Asumsi value adalah string
+        hex_value = ''.join([f"{ord(c):02X}" for c in value])  # Convert string ke hex
+        return f"{tag}{len(hex_value)//2:02X}{hex_value}"  # Menghitung panjang dalam byte dan mengonversinya
 
-# Contoh untuk menangani Tag yang Dikelompokkan dengan Informasi Panjang
-def encode_grouped_tag(tag, nested_tags):
-    """
-    Mengkodekan tag yang dikelompokkan (seperti Tag 63) dengan menghitung panjang anak tag dan menambahkan informasi panjang.
-    :param tag: Tag utama (misalnya, "63").
-    :param nested_tags: Dictionary tag yang dikelompokkan.
-    :return: Tag yang sudah dikodekan dengan informasi panjang.
-    """
-    # Pertama, hitung total panjang dari tag anak
-    nested_data = ''.join(encode_tag(inner_tag, inner_value) for inner_tag, inner_value in nested_tags.items())
-    total_length = len(nested_data) // 2  # Panjang dalam byte
-    
-    # Konversi panjang ke format heksadesimal
-    length_hex = f"{total_length:02X}"
-    
-    # Kembalikan tag yang dikelompokkan dengan informasi panjang
-    return f"{tag}{length_hex}{nested_data}"
+def parse_tlv(data):
+    index = 0
+    parsed_tags = []
 
-# Data Contoh
-tags = {
-    "85": "CPV01",
-    "61": {
-        "4F": "A0000006022020",  # Ini dilewatkan untuk konversi
-        "50": "QRISCPM",
-    },
-    "5A": "9360083039999999995F",  # Ini dilewatkan untuk konversi
-    "5F20": "Niko Joanto",
-    "5F2D": "iden",
-    "5F50": "mailto:niko@yodu.id",
-    "9F08": "3.1.2",
-    "9F25": "8888",  # Ini dilewatkan untuk konversi
-    "63": {  # Tag yang dikelompokkan
-        "9F74": "b52765ca5127fec9c3430d5d01cd3453",
-    },
-}
+    while index < len(data):
+        # Ambil Tag
+        if data[index:index + 2].startswith('5F') or data[index:index + 2].startswith('9F'):
+            tag = data[index:index + 4]  # Tag dengan panjang 2 byte (contoh: 5F20, 9F25)
+            index += 4
+        else:
+            tag = data[index:index + 2]  # Tag dengan panjang 1 byte (contoh: 85, 50)
+            index += 2
 
-# Memproses tag untuk menghasilkan output akhir
-encoded_tags = ''.join(encode_tag(tag, value) for tag, value in tags.items())
+        # Ambil Length
+        length = int(data[index:index + 2], 16)  # Panjang dalam hex ke desimal
+        index += 2
 
-# Penanganan khusus untuk tag yang dikelompokkan (misalnya, 63)
-encoded_tags = encode_grouped_tag("63", tags["63"])
+        # Ambil Value
+        value = data[index:index + (length * 2)]  # Panjang value = length * 2 (karena hex)
+        index += (length * 2)
 
-print(f"Tag yang sudah dikodekan dengan informasi panjang: {encoded_tags}")
+        # Tambahkan ke array hasil
+        parsed_tags.append({"Tag": tag, "Length": length, "Value": value})
 
-def luhn_check_digit(base_data):
-    """
-    Hitung check digit menggunakan algoritma Luhn.
-    :param base_data: String 18 digit (BIN + Sumber Dana + NoCustomer)
-    :return: Check digit (1 digit)
-    """
-    digits = [int(d) for d in base_data]
-    # Lakukan operasi Luhn pada digit
-    for i in range(len(digits) - 1, -1, -2):  # Mulai dari posisi ganjil (0-based index)
-        digits[i] *= 2
-        if digits[i] > 9:
-            digits[i] -= 9
-    total = sum(digits)
-    return (10 - (total % 10)) % 10  # Check digit
+    return parsed_tags
 
 
-def process_tag_5a(bin_nns, source_fund, customer_number, tags):
-    """
-    Proses Tag 5A berdasarkan aturan yang diberikan.
-    :param bin_nns: BIN berbasis NNS (6 digit)
-    :param source_fund: Sumber Dana (4 digit)
-    :param customer_number: Nomor Customer (8 digit)
-    :param tags: Dictionary berisi semua tag dalam QR Code
-    :return: Updated dictionary dengan Tag 5A jika diperlukan
-    """
-    if "57" not in tags:  # Jika Tag 57 tidak ada
-        # Gabungkan base data
-        base_data = f"{bin_nns}{source_fund}{customer_number}"
-        if len(base_data) != 18:
-            raise ValueError("Base data harus 18 digit (BIN + Sumber Dana + NoCustomer)")
+# Input Data
+data = "8505435056303161A54F0E413030303030303630323230323050075152495343504D5A1E3132333435363738393039333630303931343330303534363637343838465F20084A6F686E20446F655F2D046964656E5F500B3139322E3136382E302E319F0805312E302E309F250437383930611B6465766963653132333B4D6F64656C583B416E64726F6964203131631E9F741B6368657175653A3332313334323936343437303536393231373636"
 
-        # Hitung check digit
-        check_digit = luhn_check_digit(base_data)
+# Parsing
+parsed_tags = parse_tlv(data)
 
-        # Tambahkan check digit ke base data
-        full_pan = f"{base_data}{check_digit}"
-
-        # Tambahkan Tag 5A ke tags
-        tags["5A"] = full_pan
-
-    return tags
+# Cetak hasil
+for tag in parsed_tags:
+    print(f"Tag: {tag['Tag']}, Length: {tag['Length']}, Value: {tag['Value']}")
 
 
-# Generate QR with Timestamp
-def generate_qr_with_timestamp(data):
-    """
-    Membuat QR Code dengan timestamp.
-    :param data: Data utama untuk QR Code.
-    :return: QR Code dengan timestamp.
-    """
-    # Tambahkan timestamp (UNIX timestamp dalam detik)
-    timestamp = int(time.time())
-    qr_data = {
-        "data": data,
-        "timestamp": timestamp
-    }
-    
-    # Buat QR Code
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(qr_data)
-    qr.make(fit=True)
-    
-    # Simpan QR Code ke file
-    img = qr.make_image(fill="black", back_color="white")
-    img.save("qr_code_with_timestamp.png")
-    
-    print(f"QR Code dibuat dengan timestamp: {timestamp}")
-    return qr_data
-
-def validate_qr_code_with_timestamp(qr_data, time_count=120):
-    """
-    Validasi QR Code untuk memastikan masih berlaku (2 menit).
-    :param qr_data: Data QR Code yang dipindai (termasuk timestamp).
-    :return: True jika valid, False jika expired.
-    """
-    if 'timestamp' not in qr_data:
-        raise ValueError("QR Code tidak memiliki timestamp.")
-    
-    current_time = int(time.time())
-    time_diff = current_time - qr_data['timestamp']
-    
-    if time_diff > time_count:  # Cek jika lebih dari 120 detik
-        print("QR Code telah kedaluwarsa.")
-        return False
-    
-    print("QR Code masih berlaku.")
-    return True
-# Fungsi untuk mengonversi Hex menjadi Base64
+# Convert Hex to Base64
 def hex_to_base64(hex_data):
-    # Pertama, hapus semua spasi dalam data hex
-    hex_data = hex_data.replace(" ", "")
-    
-    # Pastikan data hex memiliki format yang benar (harus dalam bentuk byte)
-    hex_bytes = bytes.fromhex(hex_data)
-    
-    # Konversi data hex yang sudah diubah menjadi Base64 menggunakan RFC 4648
-    base64_data = base64.b64encode(hex_bytes).decode('utf-8')
-    
-    return base64_data
+    # Filter hanya karakter hexadecimal (0-9, A-F)
+    valid_hex = ''.join(c for c in hex_data if c in '0123456789ABCDEFabcdef')
+    try:
+        hex_bytes = bytes.fromhex(valid_hex)
+    except ValueError:
+        return None  # Jika ada kesalahan dalam konversi, kembalikan None
+    return base64.b64encode(hex_bytes).decode('utf-8')
 
-# Data Tag yang sudah dikodekan (hex) sebelumnya
+def is_valid_hex(data):
+    # Mengecek apakah data hanya berisi karakter hex (0-9, A-F)
+    try:
+        bytes.fromhex(data)
+        return True
+    except ValueError:
+        return False
+
 encoded_tags = '8543505630316107A0000006022020500751524390036534E696B6F204A6F616E746F6964656E69646D61696C746F3A6E696B6F40796F64752E6964332E312E329F2588886305352363563363531323766666339333433306435643031636433343533'
 
-# Konversi Hex menjadi Base64
-base64_result = hex_to_base64(encoded_tags)
+if is_valid_hex(encoded_tags):
+    binary_data = bytes.fromhex(encoded_tags)
+    print("Binary Data:", binary_data)
+else:
+    print("Invalid Hexadecimal Data")
 
-print(f"Base64 Data: {base64_result}")
-
+def string_to_hex(input_string):
+    """Convert a plain string to its hexadecimal representation."""
+    return input_string.encode('utf-8').hex()
 
 # Generate QR CPM
 @app.route('/generate_qr_cpm', methods=['POST'])
 def generate_qr_cpm():
     data = request.json
 
-    # Step 1: Validate Input
+    # Validate input
     is_valid, error_message = validate_input(data)
     if not is_valid:
         return jsonify({"error": error_message}), 400
+    
+    dynamic_5F20 = data.get("5F20", "paang") 
+    dynamic_5F50 = data.get("5F50", "mailto:paang@yodu.id")
+    
+    hex_5F20 = string_to_hex(dynamic_5F20)
+    hex_5F50 = string_to_hex(dynamic_5F50)
 
-    # Step 2: Generate Yodu Ref No and Secret Key
+    # Generate necessary values
     yodu_ref_no = generate_yodu_ref_no()
     secret_key = generate_secret_key()
-
-    # Step 3: Set Validity Period (2 minutes from now)
     validity_period = datetime.datetime.utcnow() + datetime.timedelta(minutes=2)
     timestamp = int(validity_period.timestamp())
 
-    # Step 4: Get User Data
-    user_data = get_data_user(data['user_account_number'])
+    # Helper function to encode length and value
+    def add_length_to_hex(tag, value):
+        hex_value = string_to_hex(value)
+        byte_length = len(hex_value) // 2  # Length in bytes
+        length_in_hex = f"{byte_length:02X}"  # Ensure two-digit hex
+        return f"{tag}{length_in_hex}{hex_value}"
 
-    # Step 5: Prepare Raw Tags
-    raw_tags = {
-        "85": "CPV01",
+    def calculate_length_for_tag_61(tags):
+        total_length = 0
+        for value in tags.values():
+            total_length += len(value) // 2  # Divide by 2 because length is in hex bytes
+        return total_length
+
+    # Encode data with length
+    # Example data
+    hex_value_85 = "4350563031"
+    hex_value_4F = "A0000006022020"
+    hex_value_50 = "5152495343504d"
+    hex_value_5A = "9360083039999999995F"
+    hex_value_5F20 = hex_5F20
+    hex_value_5F2D = "6964656E"
+    hex_value_5F50 = hex_5F50
+    hex_value_9F08 = "332E312E32"
+    hex_value_9F25 = "8888"
+    hex_value_9F74 = "6235323736356361353132376665633963333433306435643031636433343533"
+
+    # Data structure
+    all_tags = {
+        "85": hex_value_85,
         "61": {
-            "4F": "A0000006022020",
-            "50": "QRISCPM",
-            "5A": user_data["account_number"][:10] + "9360091430054667488F",
-            "5F20": user_data["name"],
-            "5F2D": "iden",
-            "5F50": data["ip_address_public"],
-            "9F08": data["app_version"],
-            "9F25": user_data["account_number"][-4:],
-            "61": f"{data['device_id']};{data['device_model']};{data['os_version']}",
+            "4F": hex_value_4F,
+            "50": hex_value_50,
+            "5A": hex_value_5A,
+            "5F20": hex_value_5F20,
+            "5F2D": hex_value_5F2D,
+            "5F50": hex_value_5F50,
+            "9F08": hex_value_9F08,
+            "9F25": hex_value_9F25,
             "63": {
-                "9F74": "cheque:32134296447056921766"
+                "9F74": hex_value_9F74
             }
         }
     }
 
-    # Step 6: Encode Tags
-    encoded_tags = ''.join(encode_tag(tag, value) for tag, value in raw_tags.items())
+    # Function to format the tags recursively
+    def format_tags(tags, level=0):
+        formatted_output = ""
+        indent = "    " * level  # Indentation based on level
 
-    # Step 7: Convert HEX to Binary
-    binary_data = bytes.fromhex(encoded_tags)
+        for key, value in tags.items():
+            if isinstance(value, dict):
+                # If value is a dict, calculate its length
+                nested_string = "".join([k + v for k, v in value.items() if not isinstance(v, dict)])
+                length_hex = f"{len(nested_string) // 2:02X}"  # Length in hex
+                formatted_output += f"{indent}{key} {length_hex}\n"
+                # Recursively format nested elements
+                formatted_output += format_tags(value, level + 1)
+            else:
+                # Print key and value
+                length_hex = f"{len(value) // 2:02X}"  # Length of value in hex
+                formatted_output += f"{indent}{key} {length_hex} {value}\n"
 
-    # Step 8: Convert Binary to Base64
-    base64_data = base64.b64encode(binary_data).decode("utf-8")
+        return formatted_output
 
-    # Step 9: Return Base64 Data
-    return jsonify({
-        "yodu_ref_no": yodu_ref_no,
-        "secret_key": secret_key,
-        "validity_period": validity_period.isoformat(),
-        "base64_qr_cpm": base64_data,
-        "timestamp": timestamp,
-    }), 200
+    # Format and return output
+    formatted_output = format_tags(all_tags)
+    print(formatted_output)  # Optional: Print the output for debugging
+    # return jsonify({"formatted_output": formatted_output})
 
+    def build_full_hex(tags):
+        full_hex = ""
+        for key, value in tags.items():
+            if isinstance(value, dict):
+                # If it's a dictionary, process its nested content
+                nested_string = build_full_hex(value)
+                length_hex = f"{len(nested_string) // 2:02X}"  # Length in hex
+                full_hex += f"{key}{length_hex}{nested_string}"
+            else:
+                # Add key and value directly
+                length_hex = f"{len(value) // 2:02X}"  # Length of value in hex
+                full_hex += f"{key}{length_hex}{value}"
+        return full_hex
+
+    # Build the full hex string from the data
+    full_hex_output = build_full_hex(all_tags)
+    print("Full Hex Output:")
+    print(full_hex_output)
+
+    # Return the combined hex string
+    base64_output = hex_to_base64(full_hex_output)
+
+    # Return the Base64 result
+    return jsonify({"base64_output": base64_output})
 if __name__ == '__main__':
     app.run(debug=True)
