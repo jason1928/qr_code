@@ -130,115 +130,111 @@ def string_to_hex(input_string):
 def generate_qr_cpm():
     data = request.json
 
-    # Validate input
     is_valid, error_message = validate_input(data)
     if not is_valid:
         return jsonify({"error": error_message}), 400
-    
-    dynamic_5F20 = data.get("5F20", "paang") 
-    dynamic_5F50 = data.get("5F50", "mailto:paang@yodu.id")
-    
-    hex_5F20 = string_to_hex(dynamic_5F20)
-    hex_5F50 = string_to_hex(dynamic_5F50)
 
-    # Generate necessary values
     yodu_ref_no = generate_yodu_ref_no()
     secret_key = generate_secret_key()
     validity_period = datetime.datetime.utcnow() + datetime.timedelta(minutes=2)
     timestamp = int(validity_period.timestamp())
+    
+    email_address = "mailto:niko@yodu.id "
+    hex_value_5F50 = string_to_hex(email_address)
+    
+    user = "Niko Joanto "
+    hex_value_5F20 = string_to_hex(user)
+    
+    app_version_number = "3.1.2"
+    hex_value_9F08 = string_to_hex(app_version_number)
+    
+    
+    
+    issuer_qris_data = secret_key
+    hex_value_9F74 = string_to_hex(issuer_qris_data)
+    
+    issuer_qris_data = secret_key
+    hex_value_9F74 = string_to_hex(issuer_qris_data)
+    
+    tag_4F_value = "A0000006022020"
+    hex_value_4F = tag_4F_value
+    print(f"Hex Value for Tag 4F: {hex_value_4F}")
+    print(f"Length of Tag 4F in bytes: {len(bytes.fromhex(hex_value_4F))}")  
 
-    # Helper function to encode length and value
-    def add_length_to_hex(tag, value):
-        hex_value = string_to_hex(value)
-        byte_length = len(hex_value) // 2  # Length in bytes
-        length_in_hex = f"{byte_length:02X}"  # Ensure two-digit hex
-        return f"{tag}{length_in_hex}{hex_value}"
+    user_data = get_data_user(data['user_account_number'])
 
-    def calculate_length_for_tag_61(tags):
-        total_length = 0
-        for value in tags.values():
-            total_length += len(value) // 2  # Divide by 2 because length is in hex bytes
-        return total_length
+    # Flatten raw_tags dictionary and ensure all values are properly encoded
+    def flatten_tags(tags):
+        result = []
+        for tag, value in tags.items():
+            if isinstance(value, dict):
+                result.extend(flatten_tags(value))  # Recursively flatten the nested dict
+            else:
+                result.append(encode_tag(tag, value))
+        return result
 
-    # Encode data with length
-    # Example data
-    hex_value_85 = "4350563031"
-    hex_value_4F = "A0000006022020"
-    hex_value_50 = "5152495343504d"
-    hex_value_5A = "9360083039999999995F"
-    hex_value_5F20 = hex_5F20
-    hex_value_5F2D = "6964656E"
-    hex_value_5F50 = hex_5F50
-    hex_value_9F08 = "332E312E32"
-    hex_value_9F25 = "8888"
-    hex_value_9F74 = "6235323736356361353132376665633963333433306435643031636433343533"
-
-    # Data structure
-    all_tags = {
-        "85": hex_value_85,
+    raw_tags = {
+        "85": "CPV01",
         "61": {
             "4F": hex_value_4F,
-            "50": hex_value_50,
-            "5A": hex_value_5A,
+            "50": "QRISCPM",
+            "5A": "9360081271829304572F",
             "5F20": hex_value_5F20,
-            "5F2D": hex_value_5F2D,
+            "5F2D": "iden",
             "5F50": hex_value_5F50,
             "9F08": hex_value_9F08,
-            "9F25": hex_value_9F25,
+            "9F25": "9999",
             "63": {
                 "9F74": hex_value_9F74
+                
             }
         }
     }
-
-    # Function to format the tags recursively
-    def format_tags(tags, level=0):
-        formatted_output = ""
-        indent = "    " * level  # Indentation based on level
-
-        for key, value in tags.items():
+    def print_tag_hex(tags):
+        for tag, value in tags.items():
             if isinstance(value, dict):
-                # If value is a dict, calculate its length
-                nested_string = "".join([k + v for k, v in value.items() if not isinstance(v, dict)])
-                length_hex = f"{len(nested_string) // 2:02X}"  # Length in hex
-                formatted_output += f"{indent}{key} {length_hex}\n"
-                # Recursively format nested elements
-                formatted_output += format_tags(value, level + 1)
+                print_tag_hex(value)  # Recursively handle nested dictionaries
             else:
-                # Print key and value
-                length_hex = f"{len(value) // 2:02X}"  # Length of value in hex
-                formatted_output += f"{indent}{key} {length_hex} {value}\n"
+                print(f"Tag: {tag}, Hex Value: {value}")
 
-        return formatted_output
-
-    # Format and return output
-    formatted_output = format_tags(all_tags)
-    print(formatted_output)  # Optional: Print the output for debugging
-    # return jsonify({"formatted_output": formatted_output})
-
-    def build_full_hex(tags):
-        full_hex = ""
-        for key, value in tags.items():
+    print_tag_hex(raw_tags)
+    
+    def print_tag_lengths(tags):
+        for tag, value in tags.items():
             if isinstance(value, dict):
-                # If it's a dictionary, process its nested content
-                nested_string = build_full_hex(value)
-                length_hex = f"{len(nested_string) // 2:02X}"  # Length in hex
-                full_hex += f"{key}{length_hex}{nested_string}"
+                print_tag_lengths(value)  # Recursively handle nested dictionaries
             else:
-                # Add key and value directly
-                length_hex = f"{len(value) // 2:02X}"  # Length of value in hex
-                full_hex += f"{key}{length_hex}{value}"
-        return full_hex
+                print(f"Tag: {tag}, Length: {len(value)}")
 
-    # Build the full hex string from the data
-    full_hex_output = build_full_hex(all_tags)
-    print("Full Hex Output:")
-    print(full_hex_output)
+    print_tag_lengths(raw_tags)
 
-    # Return the combined hex string
-    base64_output = hex_to_base64(full_hex_output)
+    # Flatten tags and encode
+    encoded_tags = ''.join(flatten_tags(raw_tags))
+    print(f"Encoded Tags: {encoded_tags}")
 
-    # Return the Base64 result
-    return jsonify({"base64_output": base64_output})
+    print(f"5F50 Hex Value: {raw_tags['61']['5F50']}")
+    print(f"5F20 Hex Value: {raw_tags['61']['5F20']}")
+    # Ensure the encoded_tags string contains only valid hexadecimal characters
+    encoded_tags = encoded_tags.replace(" ", "").upper()  # Remove spaces and ensure uppercase
+
+    try:
+        # Convert to binary
+        binary_data = bytes.fromhex(encoded_tags)
+        print(f"Binary Data: {binary_data}")
+    except ValueError as e:
+        print(f"Error converting to binary: {e}")
+        return jsonify({"error": "Invalid hex encoding in tags"}), 400
+
+    # Convert to base64
+    base64_data = hex_to_base64(encoded_tags)
+
+    return jsonify({
+        "yodu_ref_no": yodu_ref_no,
+        "secret_key": secret_key,
+        "validity_period": validity_period.isoformat(),
+        "base64_qr_cpm": base64_data,
+        "timestamp": timestamp,
+    }), 200
+
 if __name__ == '__main__':
     app.run(debug=True)
